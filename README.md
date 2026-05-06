@@ -1,3 +1,5 @@
+## Work in progress
+
 # inference-router
 
 A pluggable Python SDK for intelligent LLM inference routing. Route requests across model tiers based on complexity, cost, and latency — without changing your application code.
