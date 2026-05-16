@@ -3,15 +3,14 @@
 A pluggable Python SDK for intelligent LLM inference routing. Route requests across model tiers based on complexity, cost, and latency — without changing your application code.
 
 ```python
-from inference_router import InferenceRouter
-from inference_router.providers.bedrock import BedrockProvider
-from inference_router.strategies import ComplexityStrategy
+from llm-inference-router import InferenceRouter
+from llm-inference-router.providers.bedrock import BedrockProvider
+from llm-inference-router.strategies import ComplexityStrategy
 
 router = InferenceRouter(
     tiers={
-        "fast":     BedrockProvider("anthropic.claude-haiku-4-5-20251001"),
-        "balanced": BedrockProvider("anthropic.claude-sonnet-4-6"),
-        "powerful": BedrockProvider("anthropic.claude-opus-4-6"),
+        "fast":     BedrockProvider("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        "balanced": BedrockProvider("us.anthropic.claude-sonnet-4-6"),
     },
     strategy=ComplexityStrategy(),
     fallback="fast"
@@ -19,9 +18,10 @@ router = InferenceRouter(
 
 response = router.complete("explain recursion in one sentence")
 print(response.text)
-print(response.model_used)   # "bedrock/anthropic.claude-haiku-4-5-20251001"
-print(response.cost_usd)     # 0.000019
-print(response.latency_ms)   # 312.4
+print(response.model_used)   # "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+print(response.cost_usd)     # 0.000016
+print(response.latency_ms)   # 1263.4
+print(response.tier_used)    # "fast"
 ```
 
 ---
@@ -37,82 +37,102 @@ Every LLM app today sends every request to the same model — same cost, same la
 - **Budget exceeded** → downgrade tier automatically
 - **Provider slow or down** → failover to backup instantly
 
-No changes to your application code. Just wrap your LLM calls with the router.
+No changes to your application code. Zero vendor lock-in. Swap providers in one line.
 
 ---
 
 ## Installation
 
-Core SDK (no providers):
+Core SDK:
 ```bash
-pip install inference-router
+pip install llm-inference-router
 ```
 
 With provider extras:
 ```bash
 # AWS Bedrock
-pip install "inference-router[bedrock]"
+pip install "llm-inference-router[bedrock]"
 
-# OpenAI
-pip install "inference-router[openai]"
+# OpenAI / OpenAI-compatible APIs (Groq, DeepInfra, Together AI)
+pip install "llm-inference-router[openai]"
 
 # Anthropic direct API
-pip install "inference-router[anthropic]"
+pip install "llm-inference-router[anthropic]"
 
 # Multiple providers
-pip install "inference-router[bedrock,openai]"
+pip install "llm-inference-router[bedrock,openai]"
+```
+
+---
+
+## Quickstart
+
+```python
+from dotenv import load_dotenv
+load_dotenv()
+
+from llm-inference-router import InferenceRouter
+from llm-inference-router.providers.bedrock import BedrockProvider
+from llm-inference-router.strategies import ChainStrategy, CostStrategy, LatencyStrategy, ComplexityStrategy
+
+router = InferenceRouter(
+    tiers={
+        "fast":     BedrockProvider("us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        "balanced": BedrockProvider("us.anthropic.claude-sonnet-4-6"),
+    },
+    strategy=ChainStrategy([
+        CostStrategy(budget_usd_per_day=5.0, tiers_by_cost=["balanced", "fast"]),
+        LatencyStrategy(sla_ms=3000, preferred_tier="balanced", fallback_tier="fast"),
+        ComplexityStrategy(),
+    ]),
+    fallback="fast"
+)
+
+# simple — routes to fast automatically
+response = router.complete("what is the capital of France?")
+print(response.tier_used)   # fast
+print(response.cost_usd)    # ~$0.000016
+
+# complex — routes to balanced automatically
+response = router.complete("explain the tradeoffs between SQL and NoSQL in detail")
+print(response.tier_used)   # balanced
+
+# async
+response = await router.acomplete("explain recursion")
+
+# streaming
+for chunk in router.stream("write a haiku about distributed systems"):
+    print(chunk, end="", flush=True)
+
+# force a specific tier
+response = router.complete("hello", tier="balanced")
 ```
 
 ---
 
 ## Providers
 
-### Built-in providers
+### AWS Bedrock
 
-#### AWS Bedrock
+Credentials loaded automatically from `~/.aws/credentials` or environment variables.
+Newer Claude models require the cross-region inference profile prefix (`us.`).
+
 ```python
-from inference_router.providers.bedrock import BedrockProvider
+from llm-inference-router.providers.bedrock import BedrockProvider
 
-# Credentials loaded from ~/.aws/credentials or environment variables
 provider = BedrockProvider(
-    model_id="anthropic.claude-haiku-4-5-20251001",
+    model_id="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     region="us-east-1"
 )
 ```
 
-#### OpenAI
-```python
-from inference_router.providers.openai import OpenAIProvider
+### Generic HTTP — OpenAI-compatible APIs
 
-provider = OpenAIProvider(
-    model="gpt-4o",
-    api_key="sk-..."
-)
-```
-
-#### Anthropic direct API
-```python
-from inference_router.providers.anthropic import AnthropicProvider
-
-provider = AnthropicProvider(
-    model="claude-opus-4-6",
-    api_key="sk-ant-..."
-)
-```
-
-#### Generic HTTP (OpenAI-compatible APIs)
-Works with DeepInfra, Groq, Together AI, Fireworks, Anyscale, and any
-provider that exposes an OpenAI-compatible endpoint:
+One provider covers Groq, DeepInfra, Together AI, Fireworks, Ollama, and any
+API following the OpenAI chat completions format:
 
 ```python
-from inference_router.providers.http import HTTPProvider
-
-# DeepInfra
-provider = HTTPProvider(
-    base_url="https://api.deepinfra.com/v1/openai",
-    api_key="your-key",
-    model="meta-llama/Meta-Llama-3-8B-Instruct"
-)
+from llm-inference-router.providers.http import HTTPProvider
 
 # Groq
 provider = HTTPProvider(
@@ -121,11 +141,18 @@ provider = HTTPProvider(
     model="mixtral-8x7b-32768"
 )
 
-# Together AI
+# DeepInfra
 provider = HTTPProvider(
-    base_url="https://api.together.xyz/v1",
+    base_url="https://api.deepinfra.com/v1/openai",
     api_key="your-key",
-    model="mistralai/Mixtral-8x7B-Instruct-v0.1"
+    model="meta-llama/Meta-Llama-3-8B-Instruct"
+)
+
+# Ollama (local, no auth needed)
+provider = HTTPProvider(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama",
+    model="llama3"
 )
 ```
 
@@ -134,8 +161,9 @@ provider = HTTPProvider(
 Support any API in ~30 lines by subclassing `BaseProvider`:
 
 ```python
-from inference_router.providers.base import BaseProvider
-from inference_router.models import RouterRequest, RouterResponse, TokenUsage, RoutingDecision
+from llm-inference-router.providers.base import BaseProvider
+from llm-inference-router.models import RouterRequest, RouterResponse, TokenUsage, RoutingDecision
+import httpx
 
 class MyCustomProvider(BaseProvider):
 
@@ -148,7 +176,6 @@ class MyCustomProvider(BaseProvider):
         return f"mycustom/{self.model}"
 
     def complete(self, request: RouterRequest) -> RouterResponse:
-        import httpx
         response = httpx.post(
             "https://api.mycustom.com/v1/chat",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -175,38 +202,54 @@ class MyCustomProvider(BaseProvider):
 ## Routing strategies
 
 ### Complexity strategy
-Routes based on a heuristic complexity score of the prompt.
-Scores prompts by length, question count, code presence, and reasoning keywords.
+
+Scores prompts 0–10 across five dimensions — token length, question count,
+reasoning keywords, code presence, and simple-query detection. Maps score to a tier.
 
 ```python
-from inference_router.strategies import ComplexityStrategy
+from llm-inference-router.strategies import ComplexityStrategy
 
 strategy = ComplexityStrategy(
     rules={
-        "fast":     (0, 3),   # complexity score 0-3
-        "balanced": (3, 7),   # complexity score 3-7
-        "powerful": (7, 10),  # complexity score 7-10
+        "fast":     (0, 3),    # score 0-3
+        "balanced": (3, 6),    # score 3-6
+        "powerful": (6, 10),   # score 6-10
     }
 )
 ```
 
-How scoring works:
-- Short prompt, no reasoning keywords → score 1-2 → `fast`
-- Medium prompt with some analysis → score 4-6 → `balanced`
-- Long prompt, code, "explain why", "compare", "tradeoffs" → score 7-9 → `powerful`
+Example scores:
 
-### Cost strategy
-Routes based on a daily/per-request budget. Downgrades tier when budget is exceeded.
+| Prompt | Score | Tier |
+|---|---|---|
+| "what is the capital of France?" | 0.0 | fast |
+| "explain how transformers work" | 3.5 | balanced |
+| "compare B-trees vs LSM trees, explain tradeoffs" | 7.5 | powerful |
+
+Debug the scorer:
 
 ```python
-from inference_router.strategies import CostStrategy
+result = strategy.explain("compare B-trees vs LSM trees")
+print(result["score"])          # 7.5
+print(result["tier_selected"])  # powerful
+print(result["breakdown"])      # per-dimension scores
+```
+
+### Cost strategy
+
+Tracks running spend globally and per-user. Downgrades tier as budget is consumed.
+
+```python
+from llm-inference-router.strategies import CostStrategy
 
 strategy = CostStrategy(
     budget_usd_per_day=10.0,
-    tier_when_exceeded="fast"   # fallback tier when budget runs out
+    tiers_by_cost=["powerful", "balanced", "fast"],  # expensive → cheap
+    downgrade_at=0.8,    # downgrade at 80% budget used
+    floor_at=0.95,       # use cheapest tier at 95% budget used
 )
 
-# Per-user budgets via request metadata
+# per-user budgets via metadata
 response = router.complete(
     "your prompt",
     metadata={"user_id": "user_123", "budget_usd": 1.0}
@@ -214,91 +257,33 @@ response = router.complete(
 ```
 
 ### Latency strategy
-Routes based on real-time p90 latency per provider. Switches to a faster
-tier when latency exceeds your SLA threshold.
+
+Tracks rolling p90 latency per tier. Failovers when SLA is breached.
 
 ```python
-from inference_router.strategies import LatencyStrategy
+from llm-inference-router.strategies import LatencyStrategy
 
 strategy = LatencyStrategy(
-    sla_ms=800,              # target p90 latency
-    fallback_tier="fast"     # switch to this tier when SLA breached
+    sla_ms=3000,
+    preferred_tier="balanced",
+    fallback_tier="fast",
+    window_size=50,
+    min_samples=5,
 )
 ```
 
-### Chaining strategies
-Combine multiple strategies — evaluated in order, first match wins:
+### Chain strategy
+
+Combines strategies in priority order. Hard constraints first, complexity last.
 
 ```python
-from inference_router.strategies import ChainStrategy
+from llm-inference-router.strategies import ChainStrategy
 
 strategy = ChainStrategy([
-    CostStrategy(budget_usd_per_day=10.0),   # check budget first
-    LatencyStrategy(sla_ms=800),              # then check latency
-    ComplexityStrategy(),                      # finally route by complexity
+    CostStrategy(budget_usd_per_day=10.0, tiers_by_cost=["balanced", "fast"]),
+    LatencyStrategy(sla_ms=3000, preferred_tier="balanced", fallback_tier="fast"),
+    ComplexityStrategy(),
 ])
-```
-
----
-
-## Router
-
-### Basic usage
-
-```python
-from inference_router import InferenceRouter
-from inference_router.providers.bedrock import BedrockProvider
-from inference_router.strategies import ComplexityStrategy
-
-router = InferenceRouter(
-    tiers={
-        "fast":     BedrockProvider("anthropic.claude-haiku-4-5-20251001"),
-        "balanced": BedrockProvider("anthropic.claude-sonnet-4-6"),
-    },
-    strategy=ComplexityStrategy(),
-    fallback="fast"
-)
-```
-
-### Sync completion
-```python
-response = router.complete("what is the capital of France?")
-print(response.text)
-```
-
-### Async completion
-```python
-response = await router.acomplete("explain transformer architecture")
-print(response.text)
-```
-
-### Streaming
-```python
-# sync
-for chunk in router.stream("write a short story"):
-    print(chunk, end="", flush=True)
-
-# async
-async for chunk in router.astream("write a short story"):
-    print(chunk, end="", flush=True)
-```
-
-### Force a specific tier
-```python
-response = router.complete("your prompt", tier="powerful")
-```
-
-### Multi-turn conversations
-```python
-from inference_router.models import Message
-
-response = router.complete(
-    prompt="what did I just ask?",
-    messages=[
-        Message(role="user", content="my name is Shubham"),
-        Message(role="assistant", content="Nice to meet you, Shubham!"),
-    ]
-)
 ```
 
 ---
@@ -308,86 +293,89 @@ response = router.complete(
 Every completion returns the same normalized shape regardless of provider:
 
 ```python
-response.text           # the generated text
-response.model_used     # "bedrock/anthropic.claude-haiku-4-5-20251001"
-response.tier_used      # "fast"
-response.tokens.input   # 42
-response.tokens.output  # 180
-response.tokens.total   # 222
-response.latency_ms     # 312.4
-response.cost_usd       # 0.000019
-response.routing        # RoutingDecision object
-
-# Routing decision details
-response.routing.tier_selected   # "fast"
-response.routing.strategy_used   # "ComplexityStrategy"
-response.routing.score           # 2.1  (complexity score)
-response.routing.reason          # "short prompt, no reasoning keywords"
-
-# Original provider response (for debugging)
-response.raw
+response.text                        # generated text
+response.model_used                  # "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+response.tier_used                   # "fast"
+response.tokens.input                # 42
+response.tokens.output               # 180
+response.tokens.total                # 222
+response.latency_ms                  # 1263.4
+response.cost_usd                    # 0.000016
+response.routing.tier_selected       # "fast"
+response.routing.strategy_used       # "ChainStrategy"
+response.routing.reason              # "" or "fallback"
+response.raw                         # original provider response
 ```
 
 ---
 
-## Observability
+## FastAPI layer
 
-```python
-stats = router.stats()
+Run `inference-router` as a REST API — any app in any language can use it over HTTP.
 
-print(stats.requests_total)       # 1423
-print(stats.cost_total_usd)       # 2.14
-print(stats.routing_breakdown)    # {"fast": 0.68, "balanced": 0.27, "powerful": 0.05}
-print(stats.avg_latency_ms)       # {"fast": 280.0, "balanced": 640.0}
-print(stats.fallbacks_triggered)  # 3
-print(stats.errors_total)         # 1
+### Start the server
+
+```bash
+python -m uvicorn app.main:app --reload
 ```
 
-Reset stats:
-```python
-router.reset_stats()
+### Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/` | health check, server status |
+| `POST` | `/query` | route a prompt, get response |
+| `POST` | `/query/stream` | streaming response |
+| `GET` | `/tiers` | list configured tiers and providers |
+| `POST` | `/debug/complexity` | debug complexity scorer for a prompt |
+| `DELETE` | `/stats/reset` | reset cost and latency counters |
+
+### Example request
+
+```bash
+POST /query
+Content-Type: application/json
+
+{
+    "prompt": "explain recursion",
+    "max_tokens": 512,
+    "temperature": 0.7,
+    "system_prompt": "Reply concisely.",
+    "tier": "balanced"
+}
 ```
+
+### Example response
+
+```json
+{
+    "text": "Recursion is when a function calls itself...",
+    "model_used": "bedrock/us.anthropic.claude-sonnet-4-6",
+    "tier_used": "balanced",
+    "tokens_total": 180,
+    "cost_usd": 0.002340,
+    "latency_ms": 3420.1,
+    "strategy_used": "ChainStrategy",
+    "was_fallback": false
+}
+```
+
+Interactive docs: `http://localhost:8000/docs`
 
 ---
 
-## FastAPI integration
+## Multi-turn conversations
 
 ```python
-from fastapi import FastAPI
-from dotenv import load_dotenv
-from inference_router import InferenceRouter
-from inference_router.providers.bedrock import BedrockProvider
-from inference_router.strategies import ComplexityStrategy
-from pydantic import BaseModel
+from llm-inference-router.models import Message
 
-load_dotenv()
-app = FastAPI()
-
-router = InferenceRouter(
-    tiers={
-        "fast":     BedrockProvider("anthropic.claude-haiku-4-5-20251001"),
-        "balanced": BedrockProvider("anthropic.claude-sonnet-4-6"),
-    },
-    strategy=ComplexityStrategy(),
-    fallback="fast"
+response = router.complete(
+    prompt="what did I just tell you?",
+    messages=[
+        Message(role="user", content="my name is Shubham"),
+        Message(role="assistant", content="Nice to meet you, Shubham!"),
+    ]
 )
-
-class QueryRequest(BaseModel):
-    prompt: str
-
-@app.post("/query")
-async def query(req: QueryRequest):
-    response = await router.acomplete(req.prompt)
-    return {
-        "text": response.text,
-        "model_used": response.model_used,
-        "cost_usd": response.cost_usd,
-        "latency_ms": response.latency_ms,
-    }
-
-@app.get("/stats")
-def stats():
-    return router.stats()
 ```
 
 ---
@@ -395,44 +383,28 @@ def stats():
 ## Project structure
 
 ```
-inference_router/
-├── __init__.py              # public API
-├── router.py                # core InferenceRouter class
-├── models.py                # Pydantic request/response models
-├── observability.py         # stats tracking
-├── providers/
-│   ├── base.py              # BaseProvider — implement for any API
-│   ├── bedrock.py           # AWS Bedrock
-│   ├── anthropic.py         # Anthropic direct API
-│   ├── openai.py            # OpenAI / compatible APIs
-│   └── http.py              # Generic HTTP for DeepInfra, Groq, etc.
-└── strategies/
-    ├── base.py              # BaseStrategy interface
-    ├── complexity.py        # heuristic complexity scorer
-    ├── cost.py              # budget-based routing
-    ├── latency.py           # SLA-based routing
-    └── chain.py             # combine multiple strategies
+inference-router/
+├── llm-inference-router/
+│   ├── __init__.py              # public API
+│   ├── router.py                # core InferenceRouter class
+│   ├── models.py                # Pydantic request/response models
+│   ├── providers/
+│   │   ├── base.py              # BaseProvider — implement for any API
+│   │   ├── bedrock.py           # AWS Bedrock
+│   │   └── http.py              # Generic HTTP for Groq, DeepInfra, etc.
+│   └── strategies/
+│       ├── base.py              # BaseStrategy interface
+│       ├── complexity.py        # heuristic complexity scorer
+│       ├── cost.py              # budget-based routing
+│       ├── latency.py           # SLA-based routing
+│       └── chain.py             # combine multiple strategies
+├── app/
+│   └── main.py                  # FastAPI REST API layer
+├── examples/
+│   └── basic_usage.py           # end-to-end usage examples
+├── tests/
+├── .env
+├── pyproject.toml
+└── README.md
 ```
 
----
-
-## Roadmap
-
-- [ ] `providers/bedrock.py` — AWS Bedrock
-- [ ] `providers/http.py` — Generic OpenAI-compatible HTTP
-- [ ] `providers/openai.py` — OpenAI
-- [ ] `providers/anthropic.py` — Anthropic direct
-- [ ] `strategies/complexity.py` — heuristic scorer
-- [ ] `strategies/cost.py` — budget enforcer
-- [ ] `strategies/latency.py` — SLA routing
-- [ ] `strategies/chain.py` — strategy chaining
-- [ ] `router.py` — core router
-- [ ] `observability.py` — stats tracking
-- [ ] FastAPI example
-- [ ] PyPI publish
-
----
-
-## License
-
-MIT
