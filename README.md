@@ -374,39 +374,11 @@ from llm-inference-router.models import Message
 response = router.complete(
     prompt="what did I just tell you?",
     messages=[
-        Message(role="user", content="my name is Shubham"),
-        Message(role="assistant", content="Nice to meet you, Shubham!"),
+        Message(role="user", content="my name is John"),
+        Message(role="assistant", content="Nice to meet you, John!"),
     ]
 )
 ```
 
----
 
-## Project structure
-
-```
-inference-router/
-├── llm-inference-router/
-│   ├── __init__.py              # public API
-│   ├── router.py                # core InferenceRouter class
-│   ├── models.py                # Pydantic request/response models
-│   ├── providers/
-│   │   ├── base.py              # BaseProvider — implement for any API
-│   │   ├── bedrock.py           # AWS Bedrock
-│   │   └── http.py              # Generic HTTP for Groq, DeepInfra, etc.
-│   └── strategies/
-│       ├── base.py              # BaseStrategy interface
-│       ├── complexity.py        # heuristic complexity scorer
-│       ├── cost.py              # budget-based routing
-│       ├── latency.py           # SLA-based routing
-│       └── chain.py             # combine multiple strategies
-├── app/
-│   └── main.py                  # FastAPI REST API layer
-├── examples/
-│   └── basic_usage.py           # end-to-end usage examples
-├── tests/
-├── .env
-├── pyproject.toml
-└── README.md
-```
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-inference-router"
-version = "0.1.2"
+version = "0.1.3"
 description = "Pluggable LLM inference routing SDK — bring any model from any provider"
 requires-python = ">=3.10"
 readme = "README.md"
