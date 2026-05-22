@@ -1,5 +1,6 @@
 
 # inference-router
+### PyPI Link : https://pypi.org/project/llm-inference-router/
 
 A pluggable Python SDK for intelligent LLM inference routing. Route requests across model tiers based on complexity, cost, and latency — without changing your application code.
 
